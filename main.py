@@ -1,3 +1,4 @@
+from google.appengine.api import users
 import webapp2
 import jinja2
 import os
@@ -24,9 +25,19 @@ class BaseHandler(webapp2.RequestHandler):
 	def write(self, *a, **kw):
 		self.response.out.write(*a, **kw)
 
+class MyHandler(webapp2.RequestHandler):
+    def get(self):
+        user = users.get_current_user()
+        if user:
+            greeting = ('Welcome, %s! (<a href="%s">sign out</a>)' %
+                        (user.nickname(), users.create_logout_url('/')))
+        else:
+            greeting = ('<a href="%s">Sign in or register</a>.' %
+                        users.create_login_url('/'))
+
+        self.response.out.write('<html><body>%s</body></html>' % greeting)
+
 class Home(BaseHandler):
-
-
 	def get(self):
 		if self.request.get('fmt'):
 			page_date_result = self.request.get('fmt')
