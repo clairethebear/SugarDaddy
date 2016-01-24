@@ -1,0 +1,44 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8"/>
+    <title>{% block title %}SugarDaddy{% endblock %}</title>
+    <link rel="stylesheet" href="/assets/css/main.css" />
+    <link rel="stylesheet" href="https://maxcdn.bootstrapcdn.com/bootstrap/3.3.6/css/bootstrap.min.css" integrity="sha384-1q8mTJOASx8j1Au+a5WDVnPi2lkFfwwEAa8hDDdjZlpLegxhjVME1fgjWPGmkzs7" crossorigin="anonymous">
+    <script src="https://code.jquery.com/ui/1.10.4/themes/smoothness/jquery-ui.css"></script>
+    <script src="http://code.jquery.com/jquery-1.8.2.min.js"></script>
+    <script type="text/javascript" src="/assets/js/main.js"></script>
+    <script type="text/javascript" src="http://code.jquery.com/jquery-1.10.1.min.js"></script>
+    <script src="https://code.jquery.com/ui/1.10.4/jquery-ui.js"></script>
+  </head>
+
+  <body>
+
+  <div class="content">
+    {% block maincontent %}
+
+    {% endblock %}
+  </div>
+
+  <div>
+    <footer>
+      <hr/>
+      <p>
+        {% if not user %}
+          <a href="/login">Login (and forgot password)</a>
+        {% else %}
+          Logged in as <span style="background-color: OldLace">{{ user.name }}</span> | <a href="/logout">Logout</a>
+        {% endif %}
+        |
+        <a href="/">Home</a>
+        |
+        <a href="/signup">New user</a>
+        |
+        <a href="/authenticated">Secured page</a> (you can see this after login)
+      </p>
+    </footer>
+  </div>
+
+
+  </body>
+</html>

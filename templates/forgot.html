@@ -1,3 +1,6 @@
+{% extends "main.html" %}
+{% block maincontent %}
+
 <h1>Recover password</h1>
 
 <p>Forgot your password? Click the link below to receive a link to recover your password.</p>
@@ -10,3 +13,4 @@
 	<input type="text" value="{{ username }}" name="username"/>
 	<input type="submit" value="Send password reset link"/>
 </form>
+{% endblock %}
