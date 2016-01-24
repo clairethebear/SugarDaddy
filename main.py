@@ -1,14 +1,20 @@
-from google.appengine.api import users
+import time
+import models
+import json
+
 import webapp2
+from webapp2_extras import security
+from webapp2_extras import auth
+from webapp2_extras import sessions
 import jinja2
 import os
-from google.appengine.ext import db
+import logging
+
+from webapp2_extras.auth import InvalidAuthIdError
+from webapp2_extras.auth import InvalidPasswordError
+from google.appengine.ext.webapp import template
+from google.appengine.api import users
 from google.appengine.ext import ndb
-import datetime
-from datetime import datetime, timedelta
-import time
-import json
-import models
 
 # This will set the variable with the template path.
 template_dir = os.path.join(os.path.dirname(__file__), 'templates')
@@ -19,26 +25,99 @@ def render_str(template, **params):
 	return t.render(params)
 
 class BaseHandler(webapp2.RequestHandler):
+
 	def render(self, template, **kw):
 		self.response.out.write(render_str(template, **kw))
 
 	def write(self, *a, **kw):
 		self.response.out.write(*a, **kw)
 
-class MyHandler(webapp2.RequestHandler):
-    def get(self):
-        user = users.get_current_user()
-        if user:
-            greeting = ('Welcome, %s! (<a href="%s">sign out</a>)' %
-                        (user.nickname(), users.create_logout_url('/')))
-        else:
-            greeting = ('<a href="%s">Sign in or register</a>.' %
-                        users.create_login_url('/'))
+	@webapp2.cached_property
+	def auth(self):
+	  """Shortcut to access the auth instance as a property."""
+	  return auth.get_auth()
 
-        self.response.out.write('<html><body>%s</body></html>' % greeting)
+	@webapp2.cached_property
+	def user_info(self):
+		"""Shortcut to access a subset of the user attributes that are stored
+		in the session.
+
+		The list of attributes to store in the session is specified in
+		  config['webapp2_extras.auth']['user_attributes'].
+		:returns
+		  A dictionary with most user information
+		"""
+		return self.auth.get_user_by_session()
+
+	@webapp2.cached_property
+	def user(self):
+		"""Shortcut to access the current logged in user.
+
+		Unlike user_info, it fetches information from the persistence layer and
+		returns an instance of the underlying model.
+
+		:returns
+		  The instance of the user model associated to the logged in user.
+		"""
+		u = self.user_info
+		return self.user_model.get_by_id(u['user_id']) if u else None
+
+	@webapp2.cached_property
+	def user_model(self):
+		"""Returns the implementation of the user model.
+
+		It is consistent with config['webapp2_extras.auth']['user_model'], if set.
+		"""
+		return self.auth.store.user_model
+
+	@webapp2.cached_property
+	def session(self):
+		"""Shortcut to access the current session."""
+		return self.session_store.get_session(backend="datastore")
+
+	def render_template(self, view_filename, params={}):
+		user = self.user_info
+		params['user'] = user
+		path = os.path.join(os.path.dirname(__file__), 'templates', view_filename)
+		self.response.out.write(template.render(path, params))
+
+	def display_message(self, message):
+	    """Utility function to display a template with a simple message."""
+	    params = {
+	      'message': message
+	    }
+	    self.render_template('message.html', params)
+
+	# this is needed for webapp2 sessions to work
+	# def dispatch(self):
+	# 	# Get a session store for this request.
+	# 	self.session_store = sessions.get_store(request=self.request)
+
+	# 	try:
+	# 		# Dispatch the request.
+	# 		webapp2.RequestHandler.dispatch(self)
+	# 	finally:
+	# 		# Save all sessions.
+	# 		self.session_store.save_sessions(self.response)
+
+# def user_required(handler):
+#   """
+#     Decorator that checks if there's a user associated with the current session.
+#     Will also fail if there's no session present.
+#   """
+#   def check_login(self, *args, **kwargs):
+#     auth = self.auth
+#     if not auth.get_user_by_session():
+#       self.redirect(self.uri_for('login'), abort=True)
+#     else:
+#       return handler(self, *args, **kwargs)
+
+#   return check_login
+
 
 class Home(BaseHandler):
 	def get(self):
+
 		if self.request.get('fmt'):
 			page_date_result = self.request.get('fmt')
 			qry = models.Post.query(models.Post.page_date == page_date_result)
@@ -57,7 +136,7 @@ class Home(BaseHandler):
 			self.response.out.write(json.dumps(json_append))
 			return
 
-		self.render('index.html')
+		self.render_template('index.html')
 
 	def post(self):
 		blood_sugar = self.request.get('blood_sugar')
@@ -73,21 +152,155 @@ class About(BaseHandler):
 	def get(self):
 		self.render('about.html')
 
-	def tester(self, stuff):
-		qry = models.Post.query(models.Post.page_date == stuff)
-		json_append = []
-		for items in stuff:
-		  item_dict = items.to_dict()
-		  date_format = item_dict.get('adddate')
-		  if date_format:
-		    item_dict['adddate'] = str(date_format)
-		  
-		  json_append.append(item_dict)
-		return qry
+class LoginHandler(BaseHandler):
+  def get(self):
+    self._serve_page()
 
+  def post(self):
+    username = self.request.get('username')
+    password = self.request.get('password')
+    try:
+      u = self.auth.get_user_by_password(username, password, remember=True,
+        save_session=True)
+      self.redirect(self.uri_for('home'))
+    except (InvalidAuthIdError, InvalidPasswordError) as e:
+      logging.info('Login failed for user %s because of %s', username, type(e))
+      self._serve_page(True)
+
+  def _serve_page(self, failed=False):
+    username = self.request.get('username')
+    params = {
+      'username': username,
+      'failed': failed
+    }
+    self.render_template('login.html', params)
+
+class ForgotPasswordHandler(BaseHandler):
+  def get(self):
+    self._serve_page()
+
+  def post(self):
+    username = self.request.get('username')
+
+    user = self.user_model.get_by_auth_id(username)
+    if not user:
+      logging.info('Could not find any user entry for username %s', username)
+      self._serve_page(not_found=True)
+      return
+
+    user_id = user.get_id()
+    token = self.user_model.create_signup_token(user_id)
+
+    verification_url = self.uri_for('verification', type='p', user_id=user_id,
+      signup_token=token, _full=True)
+
+    msg = 'Send an email to user in order to reset their password. \
+          They will be able to do so by visiting <a href="{url}">{url}</a>'
+
+    self.display_message(msg.format(url=verification_url))
+  
+  def _serve_page(self, not_found=False):
+    username = self.request.get('username')
+    params = {
+      'username': username,
+      'not_found': not_found
+    }
+    self.render_template('forgot.html', params)
+
+class SignupHandler(BaseHandler):
+  def get(self):
+    self.render_template('signup.html')
+
+  def post(self):
+    user_name = self.request.get('username')
+    email = self.request.get('email')
+    name = self.request.get('name')
+    password = self.request.get('password')
+    last_name = self.request.get('lastname')
+
+    unique_properties = ['email_address']
+    user_data = self.user_model.create_user(user_name,
+      unique_properties,
+      email_address=email, name=name, password_raw=password,
+      last_name=last_name, verified=False)
+    if not user_data[0]: #user_data is a tuple
+      self.display_message('Unable to create user for email %s because of \
+        duplicate keys %s' % (user_name, user_data[1]))
+      return
+    
+    user = user_data[1]
+    user_id = user.get_id()
+
+    token = self.user_model.create_signup_token(user_id)
+
+    verification_url = self.uri_for('verification', type='v', user_id=user_id,
+      signup_token=token, _full=True)
+
+    msg = 'Send an email to user in order to verify their address. \
+          They will be able to do so by visiting <a href="{url}">{url}</a>'
+
+    self.display_message(msg.format(url=verification_url))
+
+class VerificationHandler(BaseHandler):
+  def get(self, *args, **kwargs):
+    user = None
+    user_id = kwargs['user_id']
+    signup_token = kwargs['signup_token']
+    verification_type = kwargs['type']
+
+    # it should be something more concise like
+    # self.auth.get_user_by_token(user_id, signup_token)
+    # unfortunately the auth interface does not (yet) allow to manipulate
+    # signup tokens concisely
+    user, ts = self.user_model.get_by_auth_token(int(user_id), signup_token,
+      'signup')
+
+    if not user:
+      logging.info('Could not find any user with id "%s" signup token "%s"',
+        user_id, signup_token)
+      self.abort(404)
+    
+    # store user data in the session
+    self.auth.set_session(self.auth.store.user_to_dict(user), remember=True)
+
+    if verification_type == 'v':
+      # remove signup token, we don't want users to come back with an old link
+      self.user_model.delete_signup_token(user.get_id(), signup_token)
+
+      if not user.verified:
+        user.verified = True
+        user.put()
+
+      self.display_message('User email address has been verified.')
+      return
+    elif verification_type == 'p':
+      # supply user to the page
+      params = {
+        'user': user,
+        'token': signup_token
+      }
+      self.render_template('resetpassword.html', params)
+    else:
+      logging.info('verification type not supported')
+      self.abort(404)
+
+config = {
+  'webapp2_extras.auth': {
+    'user_model': 'models.User',
+    'user_attributes': ['name']
+  },
+  'webapp2_extras.sessions': {
+    'secret_key': 'YOUR_SECRET_KEY'
+  }
+}
 
 
 app = webapp2.WSGIApplication([
-    ('/', Home),
-    ('/about', About),
-], debug=True)
+	webapp2.Route('/', Home, name='home'),
+	webapp2.Route('/about', About, name='about'),
+	webapp2.Route('/login', LoginHandler, name='login'),
+	webapp2.Route('/forgot', ForgotPasswordHandler, name='forgot'),
+	webapp2.Route('/signup', SignupHandler),
+	webapp2.Route('/<type:v|p>/<user_id:\d+>-<signup_token:.+>',
+      handler=VerificationHandler, name='verification'),
+], debug=True,config=config)

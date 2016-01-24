@@ -49,5 +49,11 @@
 				</tr>
 			</table>
 		</div>
+		{% if not user %}
+          <a href="/login">Login (and forgot password)</a>
+        {% else %}
+          Logged in as <span style="background-color: OldLace">{{ user.name }}</span> | <a href="/logout">Logout</a>
+        {% endif %}
+        <a href="/signup">New user</a>
 	</body>
 </html>
